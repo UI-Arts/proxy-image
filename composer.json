@@ -1,0 +1,24 @@
+{
+  "name": "uiarts/proxy-image",
+  "description": "Proxy images",
+  "license": "MIT",
+  "authors": [
+    {
+        "name": "Andrii Ostrovskij",
+        "email": "andrijostrovskij1@gmail.com"
+    }
+  ],
+  "autoload": {
+    "psr-4": {
+        "UIArts\\ProxyImage\\": "src/"
+    }
+  },
+  "extra": {
+    "laravel": {
+        "providers": [
+            "UIArts\\ProxyImage\\Providers\\ImagesServiceProvider"
+        ]
+    }
+  }
+}
+
