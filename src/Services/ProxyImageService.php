@@ -567,6 +567,12 @@ class ProxyImageService
     public function originalUrl(string $path, ?string $disk = null): string
     {
         $disk = $this->resolveDisk($disk);
+        $path = trim($path);
+
+        if ($this->isAbsoluteUrl($path)) {
+            return $path;
+        }
+
         $path = ltrim($path, '/');
 
         if ($this->hasSourcePrefix($path)) {
@@ -581,6 +587,11 @@ class ProxyImageService
         $key = $this->buildKey($originPrefix, $path);
 
         return Storage::disk(config("proxy-image.origins.$disk.disk"))->url($key);
+    }
+
+    protected function isAbsoluteUrl(string $path): bool
+    {
+        return (bool) preg_match('~^(?:https?:)?//~i', $path);
     }
 
     protected function detectExtension(string $path): string
