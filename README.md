@@ -102,15 +102,18 @@ https://example.com/i/{signature}/w:800/dXBsb2Fkcy90ZXN0LmpwZw.jpg
         'tablet' => [300, 'a'],
         'desktop' => [800, 'a'],
     ],
+    class: 'picture-wrap', // class для <picture>
     attributes: [
         'mode' => 'fit', // fit, fill
         'quality' => 85,
         'densities' => [1, 2],
         'alt' => 'Some alt',
         'title' => 'Some title',
+        'class' => 'img-fluid', // class для <img>
         'data-zoom' => 'uploads/image.jpg',
         'data-error-src' => 'uploads/image.jpg',
         'loading' => 'lazy',
+        'fetchPriority' => 'high', // high, low, auto
     ],
 )
 !!}

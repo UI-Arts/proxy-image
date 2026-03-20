@@ -170,7 +170,7 @@ class ProxyImageService
         return $this->imageUrl($path, $width, $height, $format, $mode, $quality, $autoOrient, $disk);
     }
 
-    public function picture(string|array|null $pictures, array $sizes = [], array $attributes = [], ?string $disk = null): string|false
+    public function picture(string|array|null $pictures, array $sizes = [], array $attributes = [], ?string $disk = null, ?string $class = null): string|false
     {
         if (empty($pictures) || empty($sizes)) {
             return false;
@@ -195,7 +195,12 @@ class ProxyImageService
         $zoom = e($attributes['data-zoom'] ?? '');
         $error = e($attributes['data-error-src'] ?? '');
         $lazy = e($attributes['loading'] ?? 'lazy');
-        $imgClass = e($attributes['class'] ?? '');
+        $imgClass = e($attributes['class'] ?? $attributes['img_class'] ?? '');
+        $imgClassAttr = $imgClass === '' ? '' : ' class="' . $imgClass . '"';
+        $pictureClass = e($class ?? $attributes['picture_class'] ?? '');
+        $pictureClassAttr = $pictureClass === '' ? '' : ' class="' . $pictureClass . '"';
+        $fetchPriority = $this->normalizeFetchPriority($attributes['fetchPriority'] ?? $attributes['fetchpriority'] ?? null);
+        $fetchPriorityAttr = $fetchPriority === null ? '' : ' fetchpriority="' . e($fetchPriority) . '"';
 
         $normalizedPictures = $this->normalizePicturesByDevice($pictures, $sizes, $devicesOrder);
 
@@ -221,9 +226,8 @@ class ProxyImageService
             }
 
             return <<<HTML
-            <picture>
-                <img
-                    class="{$imgClass}"
+            <picture{$pictureClassAttr}>
+                <img{$imgClassAttr}
                     src="{$originalUrl}"
                     alt="{$alt}"
                     title="{$title}"
@@ -233,6 +237,7 @@ class ProxyImageService
                     data-error-src="{$error}"
                     onerror="imgError(this)"
                     loading="{$lazy}"
+                    {$fetchPriorityAttr}
                 />
             </picture>
             HTML;
@@ -327,9 +332,8 @@ class ProxyImageService
         }
 
         return <<<HTML
-        <picture>
-            {$sources}<img
-                class="{$imgClass}"
+        <picture{$pictureClassAttr}>
+            {$sources}<img{$imgClassAttr}
                 data-src="{$fallbackSrc}"
                 data-srcset="{$fallbackSrcset}"
                 src="{$placeholder}"
@@ -341,9 +345,25 @@ class ProxyImageService
                 data-error-src="{$error}"
                 onerror="imgError(this)"
                 loading="{$lazy}"
+                {$fetchPriorityAttr}
             />
         </picture>
         HTML;
+    }
+
+    protected function normalizeFetchPriority(mixed $fetchPriority): ?string
+    {
+        if (!is_string($fetchPriority)) {
+            return null;
+        }
+
+        $normalized = strtolower(trim($fetchPriority));
+
+        if (in_array($normalized, ['high', 'low', 'auto'], true)) {
+            return $normalized;
+        }
+
+        return null;
     }
 
     protected function contentTypeForExtension(string $extension): string
