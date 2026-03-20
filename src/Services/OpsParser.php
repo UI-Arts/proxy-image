@@ -33,22 +33,39 @@ class OpsParser
 
                 $mode = (string) $parts[1];
                 $w = (int) $parts[2];
-                $h = (int) $parts[3];
+
+                $hRaw = $parts[3];
+                if ($hRaw === 'a') {
+                    $h = 'a';
+                } elseif (is_numeric($hRaw) && ((int)$hRaw > 0)) {
+                    $h = (int) $hRaw;
+                } else {
+                    abort(400, 'Bad h value');
+                }
 
                 if (!in_array($mode, config('proxy-image.resize_modes', []), true))
                     abort(400, 'Bad rs mode');
-                if ($w <= 0 || $h <= 0)
-                    abort(400, 'Bad rs size');
+
+                if ($w <= 0)
+                    abort(400, 'Bad w size');
+
+                if ($h !== 'a') {
+                    if ($h <= 0)
+                        abort(400, 'Bad h size');
+                }
 
                 $rsCfg = (array) config('proxy-image.allowed_ops.rs', []);
                 $maxW = (int) ($rsCfg['max_width'] ?? 3000);
                 $maxH = (int) ($rsCfg['max_height'] ?? 3000);
 
-                if ($w > $maxW || $h > $maxH)
-                    abort(400, 'Too big');
+                if ($w > $maxW)
+                    abort(400, 'w too big');
+
+                if ($h !== 'a' && $h > $maxH)
+                    abort(400, 'h too big');
 
                 $maxPixels = (int) ($rsCfg['max_pixels'] ?? 12_000_000);
-                if (($w * $h) > $maxPixels)
+                if ($h !== 'a' && ($w * $h) > $maxPixels)
                     abort(400, 'Too many pixels');
 
                 $out['resize'] = ['mode' => $mode, 'w' => $w, 'h' => $h];

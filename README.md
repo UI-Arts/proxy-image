@@ -91,3 +91,27 @@ if (!-e $request_filename) {
 https://example.com/i/{signature}/w:800/dXBsb2Fkcy90ZXN0LmpwZw.jpg
 ```
 
+## Приклад Використання
+
+```
+{!!
+\UIArts\ProxyImage\Facades\ProxyImage::picture(
+    pictures: 'uploads/image.jpg',
+    sizes: [
+        'mobile' => [300, 'a'], // [(int)width, (int|string)height] height - може бути або int або стрінг, але тільки "a", що означає auto
+        'tablet' => [300, 'a'],
+        'desktop' => [800, 'a'],
+    ],
+    attributes: [
+        'mode' => 'fit', // fit, fill
+        'quality' => 85,
+        'densities' => [1, 2],
+        'alt' => 'Some alt',
+        'title' => 'Some title',
+        'data-zoom' => 'uploads/image.jpg',
+        'data-error-src' => 'uploads/image.jpg',
+        'loading' => 'lazy',
+    ],
+)
+!!}
+```

@@ -137,7 +137,7 @@ class ProxyImageService
         return ltrim($key, '/');
     }
 
-    public function imageUrl(string $path, ?int $width = null, ?int $height = null, string $format = 'webp', string $mode = 'fill', ?int $quality = null, bool $autoOrient = true, ?string $disk = null): string
+    public function imageUrl(string $path, ?int $width = null, $height = null, string $format = 'webp', string $mode = 'fill', ?int $quality = null, bool $autoOrient = true, ?string $disk = null): string
     {
         $disk = $this->resolveDisk($disk);
         $format = strtolower($format);
@@ -151,7 +151,7 @@ class ProxyImageService
             return $this->originalUrl($path, $disk);
         }
 
-        if (!$this->isSupportedResize($width, $height)) {
+        if (is_int($height) && !$this->isSupportedResize($width, $height)) {
             return $this->originalUrl($path, $disk);
         }
 
@@ -216,6 +216,10 @@ class ProxyImageService
         if ($this->isBypassExtension($fallbackExtension)) {
             $originalUrl = $this->originalUrl($fallbackPath, $disk);
 
+            if($fallbackHeight == 'a') {
+                $fallbackHeight = "auto";
+            }
+
             return <<<HTML
             <picture>
                 <img
@@ -261,7 +265,7 @@ class ProxyImageService
                 $srcset = $this->buildDensitySrcset(
                     $path,
                     (int) $width,
-                    (int) $height,
+                    $height,
                     $format,
                     $mode,
                     $quality,
@@ -317,6 +321,10 @@ class ProxyImageService
             $disk,
             $densities
         );
+
+        if($fallbackHeight == 'a') {
+            $fallbackHeight = "auto";
+        }
 
         return <<<HTML
         <picture>
@@ -380,7 +388,7 @@ class ProxyImageService
         return false;
     }
 
-    protected function buildOps(?int $width, ?int $height, string $mode, ?int $quality, bool $autoOrient): string
+    protected function buildOps(?int $width, $height = null, string $mode, ?int $quality, bool $autoOrient): string
     {
         $parts = [];
 
@@ -440,14 +448,14 @@ class ProxyImageService
     protected function buildDensitySrcset(
         string $path,
         int $width,
-        int $height,
+        int|string $height,
         string $format,
         string $mode,
         ?int $quality,
         string $disk,
         array $densities = [1, 2]
     ): string {
-        if ($width <= 0 || $height <= 0) {
+        if ($width <= 0 || ($height <= 0 && $height !== "a")) {
             return '';
         }
 
@@ -461,7 +469,7 @@ class ProxyImageService
             }
 
             $scaledWidth = max(1, $width * $density);
-            $scaledHeight = max(1, $height * $density);
+            $scaledHeight = $height === 'a' ? 'a' : max(1, $height * $density);
 
             $url = $this->imageUrl(
                 $path,

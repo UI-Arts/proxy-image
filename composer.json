@@ -3,10 +3,9 @@
   "description": "Proxy images",
   "license": "MIT",
   "authors": [
-    {
-        "name": "Andrii Ostrovskij",
-        "email": "andrijostrovskij1@gmail.com"
-    }
+      {
+          "name": "UI-Arts"
+      }
   ],
   "autoload": {
     "psr-4": {

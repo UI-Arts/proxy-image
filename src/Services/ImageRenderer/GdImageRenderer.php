@@ -55,7 +55,7 @@ class GdImageRenderer implements ImageRendererInterface
             if (!empty($ops['resize'])) {
                 $mode = $ops['resize']['mode'];
                 $w = (int) $ops['resize']['w'];
-                $h = (int) $ops['resize']['h'];
+                $h = $ops['resize']['h'];
 
                 $img = $this->resize($img, $w, $h, $mode);
             }
@@ -88,16 +88,27 @@ class GdImageRenderer implements ImageRendererInterface
         }
     }
 
-    private function resize($img, int $w, int $h, string $mode)
+    private function resize($img, int $w, $h, string $mode)
     {
         $srcW = imagesx($img);
         $srcH = imagesy($img);
 
         if ($mode === 'fit') {
-            // fit inside W/H, keep aspect
-            $scale = min($w / $srcW, $h / $srcH);
-            $dstW = max(1, (int) floor($srcW * $scale));
-            $dstH = max(1, (int) floor($srcH * $scale));
+            $autoHeight = ($h === 'a');
+
+            if ($autoHeight) {
+                // fit по ширині, висоту рахуємо пропорційно
+                $dstW = max(1, (int) floor($w));
+                $scale = $dstW / $srcW;
+                $dstH = max(1, (int) floor($srcH * $scale));
+            } else {
+                $h = (int) $h;
+
+                // fit inside W/H, keep aspect
+                $scale = min($w / $srcW, $h / $srcH);
+                $dstW = max(1, (int) floor($srcW * $scale));
+                $dstH = max(1, (int) floor($srcH * $scale));
+            }
 
             $dst = imagecreatetruecolor($dstW, $dstH);
             imagealphablending($dst, false);
