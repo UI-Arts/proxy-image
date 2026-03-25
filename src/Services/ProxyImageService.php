@@ -218,32 +218,13 @@ class ProxyImageService
         $fallbackPath = $normalizedPictures[$fallbackDevice];
         $fallbackExtension = $this->detectExtension($fallbackPath);
 
-        if ($this->isBypassExtension($fallbackExtension)) {
-            $originalUrl = $this->originalUrl($fallbackPath, $disk);
-
-            if($fallbackHeight == 'a') {
-                $fallbackHeight = "auto";
-            }
-
-            return <<<HTML
-            <picture{$pictureClassAttr}>
-                <img{$imgClassAttr}
-                    src="{$originalUrl}"
-                    alt="{$alt}"
-                    title="{$title}"
-                    width="{$fallbackWidth}"
-                    height="{$fallbackHeight}"
-                    data-zoom="{$zoom}"
-                    data-error-src="{$error}"
-                    onerror="imgError(this)"
-                    loading="{$lazy}"
-                    {$fetchPriorityAttr}
-                />
-            </picture>
-            HTML;
-        }
-
-        $sources = '';
+        $sources = $this->buildBypassSources(
+            $normalizedPictures,
+            $sizes,
+            $breakpoints,
+            $devicesOrder,
+            $disk
+        );
 
         foreach ($formats as $format) {
             $format = strtolower((string) $format);
@@ -315,6 +296,31 @@ class ProxyImageService
             }
         }
 
+        if ($this->isBypassExtension($fallbackExtension)) {
+            $fallbackSrc = $this->originalUrl($fallbackPath, $disk);
+
+            if ($fallbackHeight === 'a') {
+                $fallbackHeight = 'auto';
+            }
+
+            return <<<HTML
+            <picture{$pictureClassAttr}>
+                {$sources}<img{$imgClassAttr}
+                    src="{$fallbackSrc}"
+                    alt="{$alt}"
+                    title="{$title}"
+                    width="{$fallbackWidth}"
+                    height="{$fallbackHeight}"
+                    data-zoom="{$zoom}"
+                    data-error-src="{$error}"
+                    onerror="imgError(this)"
+                    loading="{$lazy}"
+                    {$fetchPriorityAttr}
+                />
+            </picture>
+            HTML;
+        }
+
         $fallbackSrc = $this->imageUrl($fallbackPath, (int) $fallbackWidth, (int) $fallbackHeight, $fallbackFormat, $mode, $quality, true, $disk);
         $fallbackSrcset = $this->buildDensitySrcset(
             $fallbackPath,
@@ -349,6 +355,85 @@ class ProxyImageService
             />
         </picture>
         HTML;
+    }
+
+    protected function buildBypassSources(
+        array $normalizedPictures,
+        array $sizes,
+        array $breakpoints,
+        array $devicesOrder,
+        string $disk
+    ): string {
+        $deviceSources = [];
+
+        foreach ($devicesOrder as $device) {
+            if (
+                !isset($normalizedPictures[$device]) ||
+                !isset($sizes[$device]) ||
+                !isset($breakpoints[$device])
+            ) {
+                continue;
+            }
+
+            $path = (string) $normalizedPictures[$device];
+            $extension = $this->detectExtension($path);
+
+            if (!$this->isBypassExtension($extension)) {
+                continue;
+            }
+
+            $deviceSources[] = [
+                'media' => (string) $breakpoints[$device],
+                'srcset' => $this->originalUrl($path, $disk),
+                'type' => $this->bypassTypeForExtension($extension),
+            ];
+        }
+
+        if (empty($deviceSources)) {
+            return '';
+        }
+
+        $uniqueVariants = [];
+
+        foreach ($deviceSources as $source) {
+            $uniqueVariants[$source['type'] . '|' . $source['srcset']] = true;
+        }
+
+        if (count($uniqueVariants) === 1) {
+            $single = $deviceSources[0];
+            $typeAttr = $single['type'] === null ? '' : ' type="' . e($single['type']) . '"';
+
+            return '<source' . $typeAttr . ' srcset="' . e($single['srcset']) . '">' . PHP_EOL;
+        }
+
+        $out = '';
+        $seen = [];
+
+        foreach ($deviceSources as $source) {
+            $key = $source['media'] . '|' . $source['srcset'] . '|' . $source['type'];
+
+            if (isset($seen[$key])) {
+                continue;
+            }
+
+            $seen[$key] = true;
+            $typeAttr = $source['type'] === null ? '' : ' type="' . e($source['type']) . '"';
+
+            $out .= '<source' . $typeAttr . ' srcset="' . e($source['srcset']) . '" media="' . e($source['media']) . '">' . PHP_EOL;
+        }
+
+        return $out;
+    }
+
+    protected function bypassTypeForExtension(string $extension): ?string
+    {
+        $extension = strtolower($extension);
+
+        return match ($extension) {
+            'svg', 'svg+xml' => 'image/svg+xml',
+            'gif' => 'image/gif',
+            default => null,
+        };
     }
 
     protected function normalizeFetchPriority(mixed $fetchPriority): ?string
