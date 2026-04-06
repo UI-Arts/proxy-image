@@ -40,6 +40,7 @@ return [
     ],
 
     'picture' => [
+        'placeholder_mode' => env('IMAGES_PICTURE_PLACEHOLDER_MODE', false),
         'formats' => ['avif', 'jpg'],
         'fallback_format' => 'jpg',
         'densities' => [1],
@@ -52,7 +53,6 @@ return [
         'devices_order' => ['desktop', 'tablet', 'mobile'],
         'exclude_types' => ['gif', 'svg', 'svg+xml'],
     ],
-
 
     'cache_ttl' => 31536000,
 ];

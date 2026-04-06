@@ -141,6 +141,13 @@ class ProxyImageService
     {
         $disk = $this->resolveDisk($disk);
         $format = strtolower($format);
+
+        if ($this->isPicturePlaceholderMode()) {
+            [$placeholderWidth, $placeholderHeight] = $this->resolveLocalDevelopmentDimensionsForUrl($width, $height);
+
+            return $this->buildLocalDevelopmentUrl($placeholderWidth, $placeholderHeight);
+        }
+
         $extension = $this->detectExtension($path);
 
         if ($this->isBypassExtension($extension)) {
@@ -217,6 +224,36 @@ class ProxyImageService
         [$fallbackWidth, $fallbackHeight] = $sizes[$fallbackDevice];
         $fallbackPath = $normalizedPictures[$fallbackDevice];
         $fallbackExtension = $this->detectExtension($fallbackPath);
+
+        if ($this->isPicturePlaceholderMode()) {
+            $localSources = $this->buildLocalDevelopmentSources(
+                $sizes,
+                $breakpoints,
+                $devicesOrder
+            );
+            [$localWidth, $localHeight] = $this->resolveLocalDevelopmentDimensions(
+                (int) $fallbackWidth,
+                $fallbackHeight
+            );
+            $fallbackSrc = $this->buildLocalDevelopmentUrl($localWidth, $localHeight);
+
+            return <<<HTML
+            <picture{$pictureClassAttr}>
+                {$localSources}<img{$imgClassAttr}
+                    src="{$fallbackSrc}"
+                    alt="{$alt}"
+                    title="{$title}"
+                    width="{$localWidth}"
+                    height="{$localHeight}"
+                    data-zoom="{$zoom}"
+                    data-error-src="{$error}"
+                    onerror="imgError(this)"
+                    loading="{$lazy}"
+                    {$fetchPriorityAttr}
+                />
+            </picture>
+            HTML;
+        }
 
         $sources = $this->buildBypassSources(
             $normalizedPictures,
@@ -548,6 +585,63 @@ class ProxyImageService
         }
 
         return null;
+    }
+
+    protected function isPicturePlaceholderMode(): bool
+    {
+        return (bool) config('proxy-image.picture.placeholder_mode', false);
+    }
+
+    protected function resolveLocalDevelopmentDimensionsForUrl(?int $width, int|string|null $height): array
+    {
+        $width = $width === null || $width <= 0 ? 1200 : $width;
+
+        return $this->resolveLocalDevelopmentDimensions($width, $height);
+    }
+
+    protected function resolveLocalDevelopmentDimensions(int $width, int|string|null $height): array
+    {
+        $width = max(1, $width);
+
+        if ($height === null || $height === 'a' || (int) $height <= 0) {
+            $height = (int) max(1, round($width / 2));
+        }
+
+        $height = max(1, (int) $height);
+
+        return [$width, $height];
+    }
+
+    protected function buildLocalDevelopmentUrl(int $width, int $height): string
+    {
+        $baseUrl = 'https://picsum.photos';
+
+        return "{$baseUrl}/{$width}/{$height}";
+    }
+
+    protected function buildLocalDevelopmentSources(
+        array $sizes,
+        array $breakpoints,
+        array $devicesOrder
+    ): string {
+        $sources = '';
+
+        foreach ($devicesOrder as $device) {
+            if (!isset($sizes[$device], $breakpoints[$device])) {
+                continue;
+            }
+
+            [$width, $height] = $sizes[$device];
+            [$width, $height] = $this->resolveLocalDevelopmentDimensions(
+                (int) $width,
+                $height
+            );
+            $src = $this->buildLocalDevelopmentUrl($width, $height);
+
+            $sources .= '<source srcset="' . e($src) . '" media="' . e((string) $breakpoints[$device]) . '">' . PHP_EOL;
+        }
+
+        return $sources;
     }
 
     protected function buildDensitySrcset(

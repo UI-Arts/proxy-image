@@ -47,9 +47,16 @@ IMAGES_LOCAL_DISK=your_disk
 IMAGES_LOCAL_PREFIX=
 IMAGES_S3_DISK=s3
 IMAGES_S3_PREFIX=
+IMAGES_PICTURE_PLACEHOLDER_MODE=false
 ```
 
 Або відредагуй `config/proxy-image.php`.
+
+### Placeholder mode (picsum)
+
+Коли `IMAGES_PICTURE_PLACEHOLDER_MODE=true`, методи `ProxyImage::picture(...)` і `ProxyImage::singleUrl(...)` віддають лінки на `https://picsum.photos/{width}/{height}`.
+Розміри беруться з `sizes` для кожного брейкпоінта. Якщо висота `a`, використовується `width / 2`.
+Це зменшує навантаження на локальну машину під час розробки.
 
 ---
 
