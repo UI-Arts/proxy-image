@@ -62,19 +62,21 @@ class ProxyImageService
         $originPrefix = (string) (config("proxy-image.origins.$driver.prefix") ?? '');
         $key = $this->buildKey($originPrefix, $relativePath);
 
-        // 8) negative cache on 404
-        if (!$source->exists($key)) {
-            return response('Not found', 404, [
-                'Cache-Control' => 'public, max-age=60',
-            ]);
+        // 8) read stream + render
+        try {
+            $stream = $source->readStream($key);
+        } catch (\Symfony\Component\HttpKernel\Exception\HttpException $e) {
+            if ($e->getStatusCode() === 404) {
+                return response('Not found', 404, [
+                    'Cache-Control' => 'public, max-age=60',
+                ]);
+            }
+
+            throw $e;
         }
 
-        // 9) read stream + render
-        $stream = $source->readStream($key);
         $result = $this->renderer->render($stream, $parsedOps, $ext);
-
         $ttl = (int) config('proxy-image.cache_ttl', 31536000);
-        $signedPart = $ops . '/' . $encoded . '.' . $ext;
 
         return response()->stream(function () use ($result) {
             try {
@@ -187,7 +189,9 @@ class ProxyImageService
         $formats = $this->normalizeFormats(
             $attributes['formats'] ?? config('proxy-image.picture.formats', ['jpg'])
         );
-        $fallbackFormat = $attributes['fallback_format'] ?? config('proxy-image.picture.fallback_format', 'jpg');
+        $fallbackFormat = $this->normalizeFallbackFormat(
+            $attributes['fallback_format'] ?? config('proxy-image.picture.fallback_format', 'jpg')
+        );
         $placeholder = config('proxy-image.picture.placeholder');
         $breakpoints = config('proxy-image.picture.breakpoints', []);
         $devicesOrder = config('proxy-image.picture.devices_order', ['mobile', 'tablet', 'desktop']);
@@ -255,13 +259,18 @@ class ProxyImageService
             HTML;
         }
 
-        $sources = $this->buildBypassSources(
+        $deviceVariants = $this->buildPictureDeviceVariants(
             $normalizedPictures,
             $sizes,
             $breakpoints,
-            $devicesOrder,
-            $disk
+            $devicesOrder
         );
+        $sources = $this->buildBypassSourcesFromVariants($deviceVariants, $disk);
+        $normalizedPathCache = [];
+        $originalUrlCache = [];
+        $signedUrlCache = [];
+        $densitySrcsetCache = [];
+        $densitiesKey = implode(',', $densities);
 
         foreach ($formats as $format) {
             $format = strtolower((string) $format);
@@ -269,39 +278,41 @@ class ProxyImageService
             $type = $this->contentTypeForExtension($format);
             $formatSources = [];
 
-            foreach ($devicesOrder as $device) {
-                if (
-                    !isset($normalizedPictures[$device]) ||
-                    !isset($sizes[$device]) ||
-                    !isset($breakpoints[$device])
-                ) {
+            foreach ($deviceVariants as $variant) {
+                if ($variant['is_bypass'] || $variant['media'] === null) {
                     continue;
                 }
 
-                [$width, $height] = $sizes[$device];
-                $path = $normalizedPictures[$device];
+                $path = $variant['path'];
+                $width = $variant['width'];
+                $height = $variant['height'];
+                $cacheKey = $path . "\0" . $width . "\0" . (string) $height . "\0" . $format . "\0" . $mode . "\0" . (string) $quality . "\0" . $densitiesKey;
 
-                if ($this->isBypassExtension($this->detectExtension($path))) {
-                    continue;
+                if (!array_key_exists($cacheKey, $densitySrcsetCache)) {
+                    $normalizedPath = $normalizedPathCache[$path] ??= $this->normalizePath($path, $disk);
+                    $densitySrcsetCache[$cacheKey] = $this->buildDensitySrcsetFromPreparedPath(
+                        $path,
+                        $normalizedPath,
+                        $width,
+                        $height,
+                        $format,
+                        $mode,
+                        $quality,
+                        $disk,
+                        $densities,
+                        $originalUrlCache,
+                        $signedUrlCache
+                    );
                 }
 
-                $srcset = $this->buildDensitySrcset(
-                    $path,
-                    (int) $width,
-                    $height,
-                    $format,
-                    $mode,
-                    $quality,
-                    $disk,
-                    $densities
-                );
+                $srcset = $densitySrcsetCache[$cacheKey];
 
                 if ($srcset === '') {
                     continue;
                 }
 
                 $formatSources[] = [
-                    'media' => (string) $breakpoints[$device],
+                    'media' => $variant['media'],
                     'srcset' => $srcset,
                 ];
             }
@@ -358,17 +369,27 @@ class ProxyImageService
             HTML;
         }
 
-        $fallbackSrc = $this->imageUrl($fallbackPath, (int) $fallbackWidth, (int) $fallbackHeight, $fallbackFormat, $mode, $quality, true, $disk);
-        $fallbackSrcset = $this->buildDensitySrcset(
-            $fallbackPath,
-            (int) $fallbackWidth,
-            (int) $fallbackHeight,
-            (string) $fallbackFormat,
-            $mode,
-            $quality,
-            $disk,
-            $densities
-        );
+        $fallbackSrc = $this->imageUrl($fallbackPath, (int) $fallbackWidth, $fallbackHeight, $fallbackFormat, $mode, $quality, true, $disk);
+        $normalizedFallbackPath = $normalizedPathCache[$fallbackPath] ??= $this->normalizePath($fallbackPath, $disk);
+        $fallbackSrcsetCacheKey = $fallbackPath . "\0" . (int) $fallbackWidth . "\0" . (string) $fallbackHeight . "\0" . $fallbackFormat . "\0" . $mode . "\0" . (string) $quality . "\0" . $densitiesKey;
+
+        if (!array_key_exists($fallbackSrcsetCacheKey, $densitySrcsetCache)) {
+            $densitySrcsetCache[$fallbackSrcsetCacheKey] = $this->buildDensitySrcsetFromPreparedPath(
+                $fallbackPath,
+                $normalizedFallbackPath,
+                (int) $fallbackWidth,
+                $fallbackHeight,
+                $fallbackFormat,
+                $mode,
+                $quality,
+                $disk,
+                $densities,
+                $originalUrlCache,
+                $signedUrlCache
+            );
+        }
+
+        $fallbackSrcset = $densitySrcsetCache[$fallbackSrcsetCacheKey];
 
         if($fallbackHeight == 'a') {
             $fallbackHeight = "auto";
@@ -394,35 +415,54 @@ class ProxyImageService
         HTML;
     }
 
-    protected function buildBypassSources(
+    protected function buildPictureDeviceVariants(
         array $normalizedPictures,
         array $sizes,
         array $breakpoints,
-        array $devicesOrder,
-        string $disk
-    ): string {
-        $deviceSources = [];
+        array $devicesOrder
+    ): array {
+        $variants = [];
 
         foreach ($devicesOrder as $device) {
-            if (
-                !isset($normalizedPictures[$device]) ||
-                !isset($sizes[$device]) ||
-                !isset($breakpoints[$device])
-            ) {
+            if (!isset($normalizedPictures[$device], $sizes[$device])) {
                 continue;
             }
 
+            [$width, $height] = $sizes[$device];
             $path = (string) $normalizedPictures[$device];
             $extension = $this->detectExtension($path);
 
-            if (!$this->isBypassExtension($extension)) {
+            $variants[] = [
+                'device' => (string) $device,
+                'path' => $path,
+                'width' => (int) $width,
+                'height' => $height,
+                'media' => isset($breakpoints[$device]) ? (string) $breakpoints[$device] : null,
+                'extension' => $extension,
+                'is_bypass' => $this->isBypassExtension($extension),
+            ];
+        }
+
+        return $variants;
+    }
+
+    protected function buildBypassSourcesFromVariants(array $deviceVariants, string $disk): string
+    {
+        $deviceSources = [];
+        $urlCache = [];
+
+        foreach ($deviceVariants as $variant) {
+            if (!$variant['is_bypass'] || $variant['media'] === null) {
                 continue;
             }
 
+            $path = $variant['path'];
+            $srcset = $urlCache[$path] ??= $this->originalUrl($path, $disk);
+
             $deviceSources[] = [
-                'media' => (string) $breakpoints[$device],
-                'srcset' => $this->originalUrl($path, $disk),
-                'type' => $this->bypassTypeForExtension($extension),
+                'media' => $variant['media'],
+                'srcset' => $srcset,
+                'type' => $this->bypassTypeForExtension($variant['extension']),
             ];
         }
 
@@ -460,6 +500,89 @@ class ProxyImageService
         }
 
         return $out;
+    }
+
+    protected function buildDensitySrcsetFromPreparedPath(
+        string $path,
+        string $normalizedPath,
+        int $width,
+        int|string $height,
+        string $format,
+        string $mode,
+        ?int $quality,
+        string $disk,
+        array $densities,
+        array &$originalUrlCache,
+        array &$signedUrlCache
+    ): string {
+        if ($width <= 0) {
+            return '';
+        }
+
+        if ($height !== 'a') {
+            $height = (int) $height;
+
+            if ($height <= 0) {
+                return '';
+            }
+        }
+
+        $parts = [];
+
+        foreach ($densities as $density) {
+            $density = (int) $density;
+
+            if ($density <= 0) {
+                continue;
+            }
+
+            $scaledWidth = max(1, $width * $density);
+            $scaledHeight = $height === 'a' ? 'a' : max(1, $height * $density);
+
+            if (is_int($scaledHeight) && !$this->isSupportedResize($scaledWidth, $scaledHeight)) {
+                $url = $originalUrlCache[$path] ??= $this->originalUrl($path, $disk);
+            } else {
+                $url = $this->buildSignedImageUrlFromPreparedPath(
+                    $normalizedPath,
+                    $scaledWidth,
+                    $scaledHeight,
+                    $format,
+                    $mode,
+                    $quality,
+                    true,
+                    $signedUrlCache
+                );
+            }
+
+            $parts[] = "{$url} {$density}x";
+        }
+
+        return implode(', ', $parts);
+    }
+
+    protected function buildSignedImageUrlFromPreparedPath(
+        string $normalizedPath,
+        int $width,
+        int|string $height,
+        string $format,
+        string $mode,
+        ?int $quality,
+        bool $autoOrient,
+        array &$cache
+    ): string {
+        $key = $normalizedPath . "\0" . $width . "\0" . (string) $height . "\0" . $format . "\0" . $mode . "\0" . (string) $quality . "\0" . (int) $autoOrient;
+
+        if (isset($cache[$key])) {
+            return $cache[$key];
+        }
+
+        $ops = $this->buildOps($width, $height, $mode, $quality, $autoOrient);
+        $encoded = rtrim(strtr(base64_encode($normalizedPath), '+/', '-_'), '=');
+        $signedPart = $ops . '/' . $encoded . '.' . $format;
+        $signature = UrlSigner::sign($signedPart);
+        $cache[$key] = "/i/{$signature}/{$ops}/{$encoded}.{$format}";
+
+        return $cache[$key];
     }
 
     protected function bypassTypeForExtension(string $extension): ?string
@@ -741,6 +864,31 @@ class ProxyImageService
         }
 
         return $normalized;
+    }
+
+    protected function normalizeFallbackFormat(mixed $format): string
+    {
+        $normalized = $this->normalizeFormats([$format]);
+
+        if (!empty($normalized)) {
+            return $normalized[0];
+        }
+
+        $configuredFallback = $this->normalizeFormats([
+            config('proxy-image.picture.fallback_format', 'jpg'),
+        ]);
+
+        if (!empty($configuredFallback)) {
+            return $configuredFallback[0];
+        }
+
+        $allowed = $this->normalizeFormats((array) config('proxy-image.allowed_ext', []));
+
+        if (!empty($allowed)) {
+            return $allowed[0];
+        }
+
+        return 'jpg';
     }
 
     public function originalUrl(string $path, ?string $disk = null): string
