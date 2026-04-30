@@ -6,6 +6,7 @@ use Illuminate\Support\ServiceProvider;
 use UIArts\ProxyImage\Services\ProxyImageService;
 use UIArts\ProxyImage\Services\ImageRenderer\ImageRendererInterface;
 use UIArts\ProxyImage\Services\ImageRenderer\GdImageRenderer;
+use UIArts\ProxyImage\Services\ImageRenderer\LibvipsImageRenderer;
 
 class ImagesServiceProvider extends ServiceProvider
 {
@@ -19,7 +20,15 @@ class ImagesServiceProvider extends ServiceProvider
 
         // core service
         $this->app->singleton(ProxyImageService::class);
-        $this->app->singleton(ImageRendererInterface::class, GdImageRenderer::class);
+        $this->app->singleton(ImageRendererInterface::class, function () {
+            $renderer = strtolower((string) config('proxy-image.renderer', 'gd'));
+
+            return match ($renderer) {
+                'libvips' => app(LibvipsImageRenderer::class),
+                'gd' => app(GdImageRenderer::class),
+                default => app(GdImageRenderer::class),
+            };
+        });
     }
 
     public function boot(): void

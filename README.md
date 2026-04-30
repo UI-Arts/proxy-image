@@ -48,9 +48,21 @@ IMAGES_LOCAL_PREFIX=
 IMAGES_S3_DISK=s3
 IMAGES_S3_PREFIX=
 IMAGES_PICTURE_PLACEHOLDER_MODE=false
+IMAGES_RENDERER=gd
+IMAGES_LIBVIPS_BINARY=vipsthumbnail
+IMAGES_LIBVIPS_MODE=vipsthumbnail
 ```
 
 Або відредагуй `config/proxy-image.php`.
+
+### Renderer
+
+- `IMAGES_RENDERER=gd` — поточний дефолтний рендерер через GD.
+- `IMAGES_RENDERER=libvips` — рендерер через `libvips` CLI.
+- `IMAGES_LIBVIPS_MODE=vipsthumbnail|thumbnail_source` — режим роботи libvips.
+- `IMAGES_LIBVIPS_BINARY` — шлях/назва бінарника для обраного режиму:
+  - `vipsthumbnail` для `IMAGES_LIBVIPS_MODE=vipsthumbnail`
+  - `vips` для `IMAGES_LIBVIPS_MODE=thumbnail_source`
 
 ### Placeholder mode (picsum)
 

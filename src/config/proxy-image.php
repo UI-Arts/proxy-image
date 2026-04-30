@@ -4,6 +4,11 @@ return [
 
     'hmac_secret' => env('IMAGES_HMAC_SECRET', '68t26clOnZB6KzleKWbgRY5J'),
     'default_disk' => env('IMAGES_DEFAULT_DISK', 's3'),
+    'renderer' => env('IMAGES_RENDERER', 'gd'),
+    'libvips' => [
+        'mode' => env('IMAGES_LIBVIPS_MODE', 'vipsthumbnail'),
+        'binary' => env('IMAGES_LIBVIPS_BINARY', 'vipsthumbnail'),
+    ],
     'quality_min' => 40,
     'quality_max' => 92,
     'allowed_ext' => ['jpg', 'jpeg', 'png', 'webp', 'avif'],
