@@ -13,7 +13,7 @@ class Base64Url
 
         $out = base64_decode($b64, true);
         if ($out === false) {
-            abort(400, 'Bad base64');
+            AbortLogger::abort(400, 'Bad base64', ['encoded' => $value]);
         }
 
         return $out;

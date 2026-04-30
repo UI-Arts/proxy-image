@@ -2,18 +2,20 @@
 
 namespace UIArts\ProxyImage\Services\ImageRenderer;
 
+use UIArts\ProxyImage\Support\AbortLogger;
+
 class GdImageRenderer implements ImageRendererInterface
 {
     public function render($originStream, array $ops, string $ext): array
     {
         if (!is_resource($originStream)) {
-            abort(502, 'Bad origin stream');
+            AbortLogger::abort(502, 'Bad origin stream');
         }
 
         $ext = strtolower($ext);
 
         if ($ext === 'avif' && !function_exists('imageavif')) {
-            abort(415, 'AVIF is not supported by GD build');
+            AbortLogger::abort(415, 'AVIF is not supported by GD build');
         }
 
         // 1) spool origin -> tmp input file
@@ -21,28 +23,40 @@ class GdImageRenderer implements ImageRendererInterface
         $tmpOut = tempnam(sys_get_temp_dir(), 'imgout_');
 
         if ($tmpIn === false || $tmpOut === false) {
-            abort(500, 'Tmp failed');
+            if (is_string($tmpIn)) {
+                @unlink($tmpIn);
+            }
+            if (is_string($tmpOut)) {
+                @unlink($tmpOut);
+            }
+            AbortLogger::abort(500, 'Tmp failed');
         }
 
         $in = fopen($tmpIn, 'wb');
         if (!is_resource($in)) {
             @unlink($tmpIn);
             @unlink($tmpOut);
-            abort(500, 'Tmp open failed');
+            AbortLogger::abort(500, 'Tmp open failed', ['tmp_in' => $tmpIn, 'tmp_out' => $tmpOut]);
         }
 
         try {
-            stream_copy_to_stream($originStream, $in);
+            $copied = stream_copy_to_stream($originStream, $in);
+            if ($copied === false || $copied === 0) {
+                $this->cleanupFiles($tmpIn, $tmpOut);
+                AbortLogger::abort(502, 'Bad origin stream', ['tmp_in' => $tmpIn]);
+            }
         } finally {
             fclose($in);
             fclose($originStream);
         }
 
+        $this->validateInputImageBounds($tmpIn);
+
         // 2) decode image (GD will allocate pixel memory)
-        $img = @imagecreatefromstring(file_get_contents($tmpIn));
+        $img = $this->createImageFromFile($tmpIn);
         if ($img === false) {
             $this->cleanupFiles($tmpIn, $tmpOut);
-            abort(415, 'Unsupported image');
+            AbortLogger::abort(415, 'Unsupported image');
         }
 
         try {
@@ -69,7 +83,7 @@ class GdImageRenderer implements ImageRendererInterface
             $ok = $this->save($img, $tmpOut, $ext, $q);
             if (!$ok) {
                 $this->cleanupFiles($tmpIn, $tmpOut);
-                abort(500, 'Encode failed');
+                AbortLogger::abort(500, 'Encode failed', ['ext' => $ext, 'quality' => $q]);
             }
 
             return [
@@ -80,7 +94,7 @@ class GdImageRenderer implements ImageRendererInterface
                 },
             ];
         } finally {
-            if (is_resource($img)) {
+            if ($this->isGdImage($img)) {
                 imagedestroy($img);
             }
             // tmpIn/tmpOut очищає cleanup()
@@ -121,34 +135,45 @@ class GdImageRenderer implements ImageRendererInterface
         }
 
         if ($mode === 'fill') {
-            // cover + center crop to W/H
-            $scale = max($w / $srcW, $h / $srcH);
-            $tmpW = max(1, (int) ceil($srcW * $scale));
-            $tmpH = max(1, (int) ceil($srcH * $scale));
+            if ($h === 'a') {
+                imagedestroy($img);
+                AbortLogger::abort(400, 'Bad fill height', ['height' => $h]);
+            }
 
-            $tmp = imagecreatetruecolor($tmpW, $tmpH);
-            imagealphablending($tmp, false);
-            imagesavealpha($tmp, true);
+            $h = (int) $h;
+            if ($h <= 0) {
+                imagedestroy($img);
+                AbortLogger::abort(400, 'Bad fill height', ['height' => $h]);
+            }
 
-            imagecopyresampled($tmp, $img, 0, 0, 0, 0, $tmpW, $tmpH, $srcW, $srcH);
+            // cover + center crop in a single resample pass
+            $dstRatio = $w / $h;
+            $srcRatio = $srcW / $srcH;
+
+            if ($srcRatio > $dstRatio) {
+                $cropH = $srcH;
+                $cropW = (int) max(1, floor($srcH * $dstRatio));
+                $cropX = (int) max(0, floor(($srcW - $cropW) / 2));
+                $cropY = 0;
+            } else {
+                $cropW = $srcW;
+                $cropH = (int) max(1, floor($srcW / $dstRatio));
+                $cropX = 0;
+                $cropY = (int) max(0, floor(($srcH - $cropH) / 2));
+            }
 
             $dst = imagecreatetruecolor($w, $h);
             imagealphablending($dst, false);
             imagesavealpha($dst, true);
 
-            $srcX = (int) max(0, floor(($tmpW - $w) / 2));
-            $srcY = (int) max(0, floor(($tmpH - $h) / 2));
-
-            imagecopy($dst, $tmp, 0, 0, $srcX, $srcY, $w, $h);
-
-            imagedestroy($tmp);
+            imagecopyresampled($dst, $img, 0, 0, $cropX, $cropY, $w, $h, $cropW, $cropH);
             imagedestroy($img);
 
             return $dst;
         }
 
         imagedestroy($img);
-        abort(400, 'Bad resize mode');
+        AbortLogger::abort(400, 'Bad resize mode', ['mode' => $mode]);
     }
 
     private function save($img, string $path, string $ext, int $q): bool
@@ -184,6 +209,11 @@ class GdImageRenderer implements ImageRendererInterface
             return $img;
         }
 
+        $type = @exif_imagetype($tmpIn);
+        if ($type !== IMAGETYPE_JPEG) {
+            return $img;
+        }
+
         $exif = @exif_read_data($tmpIn);
         if (!is_array($exif)) {
             return $img;
@@ -192,12 +222,18 @@ class GdImageRenderer implements ImageRendererInterface
         $orientation = (int) ($exif['Orientation'] ?? 1);
 
         // minimal set (common cases)
-        return match ($orientation) {
+        $rotated = match ($orientation) {
             3 => imagerotate($img, 180, 0),
             6 => imagerotate($img, -90, 0),
             8 => imagerotate($img, 90, 0),
             default => $img,
         };
+
+        if ($rotated !== $img && $this->isGdImage($img)) {
+            imagedestroy($img);
+        }
+
+        return $rotated;
     }
 
     private function contentType(string $ext): string
@@ -209,5 +245,53 @@ class GdImageRenderer implements ImageRendererInterface
     {
         @unlink($tmpIn);
         @unlink($tmpOut);
+    }
+
+    private function isGdImage(mixed $img): bool
+    {
+        return is_resource($img) || $img instanceof \GdImage;
+    }
+
+    private function createImageFromFile(string $file)
+    {
+        $type = @exif_imagetype($file);
+
+        return match ($type) {
+            IMAGETYPE_JPEG => function_exists('imagecreatefromjpeg') ? @imagecreatefromjpeg($file) : false,
+            IMAGETYPE_PNG => function_exists('imagecreatefrompng') ? @imagecreatefrompng($file) : false,
+            IMAGETYPE_WEBP => function_exists('imagecreatefromwebp') ? @imagecreatefromwebp($file) : false,
+            IMAGETYPE_AVIF => function_exists('imagecreatefromavif') ? @imagecreatefromavif($file) : false,
+            default => false,
+        };
+    }
+
+    private function validateInputImageBounds(string $file): void
+    {
+        $info = @getimagesize($file);
+        if (!is_array($info)) {
+            AbortLogger::abort(415, 'Unsupported image', ['file' => $file]);
+        }
+
+        $width = (int) ($info[0] ?? 0);
+        $height = (int) ($info[1] ?? 0);
+
+        if ($width <= 0 || $height <= 0) {
+            AbortLogger::abort(415, 'Unsupported image', ['width' => $width, 'height' => $height]);
+        }
+
+        $rsCfg = (array) config('proxy-image.allowed_ops.rs', []);
+        $maxInputW = (int) ($rsCfg['max_input_width'] ?? 8000);
+        $maxInputH = (int) ($rsCfg['max_input_height'] ?? 8000);
+        $maxInputPixels = (int) ($rsCfg['max_input_pixels'] ?? 40_000_000);
+
+        if ($width > $maxInputW || $height > $maxInputH || ($width * $height) > $maxInputPixels) {
+            AbortLogger::abort(413, 'Origin image too large', [
+                'width' => $width,
+                'height' => $height,
+                'max_width' => $maxInputW,
+                'max_height' => $maxInputH,
+                'max_pixels' => $maxInputPixels,
+            ]);
+        }
     }
 }

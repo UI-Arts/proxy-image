@@ -36,6 +36,10 @@ return [
             'max_width' => 4000,
             'max_height' => 4000,
             'max_pixels' => 16_000_000,
+            // input/origin bounds before GD decode
+            'max_input_width' => 8000,
+            'max_input_height' => 8000,
+            'max_input_pixels' => 40_000_000,
         ],
     ],
 

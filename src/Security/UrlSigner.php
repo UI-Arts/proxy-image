@@ -2,6 +2,8 @@
 
 namespace UIArts\ProxyImage\Security;
 
+use UIArts\ProxyImage\Support\AbortLogger;
+
 class UrlSigner
 {
     public static function sign(string $signedPart): string
@@ -9,7 +11,7 @@ class UrlSigner
         $secret = (string) config('proxy-image.hmac_secret');
 
         if ($secret === '') {
-            abort(500, 'IMAGES_HMAC_SECRET is empty');
+            AbortLogger::abort(500, 'IMAGES_HMAC_SECRET is empty');
         }
 
         $raw = hash_hmac('sha256', $signedPart, $secret, true);

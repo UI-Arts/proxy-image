@@ -3,6 +3,7 @@
 namespace UIArts\ProxyImage\Services\Source;
 
 use Illuminate\Support\Facades\Storage;
+use UIArts\ProxyImage\Support\AbortLogger;
 
 class S3Source implements ImageSourceInterface
 {
@@ -13,7 +14,7 @@ class S3Source implements ImageSourceInterface
         )->readStream($path);
 
         if ($stream === false) {
-            abort(404);
+            AbortLogger::abort(404, 'Origin not found', ['driver' => 's3', 'path' => $path], 'info');
         }
 
         return $stream;

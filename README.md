@@ -101,7 +101,7 @@ https://example.com/i/{signature}/w:800/dXBsb2Fkcy90ZXN0LmpwZw.jpg
 ## Приклад Використання
 
 ```
-{!!
+{!! 
 \UIArts\ProxyImage\Facades\ProxyImage::picture(
     pictures: 'uploads/image.jpg',
     sizes: [
@@ -124,4 +124,26 @@ https://example.com/i/{signature}/w:800/dXBsb2Fkcy90ZXN0LmpwZw.jpg
     ],
 )
 !!}
+```
+
+## Headless JSON (picture data)
+
+Структуровані дані для `<picture>` можна отримати без HTML:
+
+```php
+\UIArts\ProxyImage\Facades\ProxyImage::pictureData(
+    pictures: 'uploads/image.jpg',
+    sizes: [
+        'mobile' => [300, 'a'],
+        'tablet' => [300, 'a'],
+        'desktop' => [800, 'a'],
+    ],
+    attributes: [
+        'mode' => 'fit',
+        'quality' => 85,
+        'densities' => [1, 2],
+        'formats' => ['avif', 'jpg'],
+        'alt' => 'Some alt',
+    ],
+);
 ```

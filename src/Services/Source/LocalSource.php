@@ -3,6 +3,7 @@
 namespace UIArts\ProxyImage\Services\Source;
 
 use Illuminate\Support\Facades\Storage;
+use UIArts\ProxyImage\Support\AbortLogger;
 
 class LocalSource implements ImageSourceInterface
 {
@@ -13,7 +14,7 @@ class LocalSource implements ImageSourceInterface
         )->readStream($path);
 
         if ($stream === false) {
-            abort(404);
+            AbortLogger::abort(404, 'Origin not found', ['driver' => 'local', 'path' => $path], 'info');
         }
 
         return $stream;

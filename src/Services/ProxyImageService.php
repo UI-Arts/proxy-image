@@ -3,19 +3,15 @@
 namespace UIArts\ProxyImage\Services;
 
 use UIArts\ProxyImage\Security\UrlSigner;
-use UIArts\ProxyImage\Support\Base64Url;
 use Symfony\Component\HttpFoundation\Response;
-use UIArts\ProxyImage\Services\Source\LocalSource;
-use UIArts\ProxyImage\Services\Source\S3Source;
-use Illuminate\Support\Str;
-use UIArts\ProxyImage\Services\ImageRenderer\ImageRendererInterface;
-use Illuminate\Support\Facades\Storage;
+use UIArts\ProxyImage\Services\Origin\OriginResolver;
+use UIArts\ProxyImage\Services\Requests\ImageRequestHandler;
 
 class ProxyImageService
 {
     public function __construct(
-        protected OpsParser $parser,
-        protected ImageRendererInterface $renderer
+        protected ImageRequestHandler $requestHandler,
+        protected OriginResolver $originResolver
     ) {
     }
 
@@ -25,123 +21,12 @@ class ProxyImageService
         string $encoded,
         string $ext
     ): Response {
-        $ext = strtolower($ext);
-
-        // 1) ext allowlist
-        if (!in_array($ext, config('proxy-image.allowed_ext', []), true)) {
-            abort(400, 'Bad ext');
-        }
-
-        // 2) decode path (може містити "s3:"/"local:")
-        $decoded = Base64Url::decode($encoded);
-
-        // 3) security path
-        if (
-            str_contains($decoded, "\0") ||
-            str_contains($decoded, '\\') ||
-            str_contains($decoded, '..') ||
-            preg_match('~^[a-zA-Z][a-zA-Z0-9+\-.]*://~', $decoded)
-        ) {
-            abort(403);
-        }
-
-        // 4) verify signature over "{ops}/{encoded}.{ext}"
-        $signedPart = $ops . '/' . $encoded . '.' . $ext;
-
-        if (!UrlSigner::verify($signature, $signedPart)) {
-            abort(403);
-        }
-
-        // 5) parse ops (allowlist/limits)
-        $parsedOps = $this->parser->parse($ops);
-
-        // 6) resolve source + driver, AND strip source prefix from path
-        [$source, $driver, $relativePath] = $this->resolveSourceDriverAndRelativePath($decoded);
-
-        // 7) apply origin prefix (allowlist root) by building storage key
-        $originPrefix = (string) (config("proxy-image.origins.$driver.prefix") ?? '');
-        $key = $this->buildKey($originPrefix, $relativePath);
-
-        // 8) read stream + render
-        try {
-            $stream = $source->readStream($key);
-        } catch (\Symfony\Component\HttpKernel\Exception\HttpException $e) {
-            if ($e->getStatusCode() === 404) {
-                return response('Not found', 404, [
-                    'Cache-Control' => 'public, max-age=60',
-                ]);
-            }
-
-            throw $e;
-        }
-
-        $result = $this->renderer->render($stream, $parsedOps, $ext);
-        $ttl = (int) config('proxy-image.cache_ttl', 31536000);
-
-        return response()->stream(function () use ($result) {
-            try {
-                if (!is_file($result['tmp_out'])) {
-                    error_log('tmp_out missing: ' . $result['tmp_out']);
-                    return;
-                }
-
-                $out = fopen($result['tmp_out'], 'rb');
-                if (is_resource($out)) {
-                    fpassthru($out);
-                    fclose($out);
-                }
-            } finally {
-                ($result['cleanup'])();
-            }
-        }, 200, [
-            'Content-Type' => $result['content_type'],
-            'Cache-Control' => 'public, max-age=' . $ttl . ', immutable',
-            'ETag' => '"' . sha1($signedPart) . '"',
-        ]);
-    }
-
-    /**
-     * @return array{0:object,1:string,2:string} [$source, $driver, $relativePath]
-     */
-    protected function resolveSourceDriverAndRelativePath(string $decoded): array
-    {
-        foreach (config('proxy-image.source_prefixes') as $prefix => $driver) {
-            if (Str::startsWith($decoded, $prefix)) {
-                $relative = substr($decoded, strlen($prefix));
-                $relative = ltrim($relative, '/');
-
-                $source = match ($driver) {
-                    's3' => app(S3Source::class),
-                    'local' => app(LocalSource::class),
-                    default => abort(400),
-                };
-
-                return [$source, $driver, $relative];
-            }
-        }
-
-        $defaultDriver = $this->resolveDisk();
-        $defaultSource = match ($defaultDriver) {
-            's3' => app(S3Source::class),
-            'local' => app(LocalSource::class),
-            default => app(LocalSource::class),
-        };
-
-        return [$defaultSource, $defaultDriver, ltrim($decoded, '/')];
-    }
-
-    protected function buildKey(string $prefix, string $relative): string
-    {
-        $prefix = trim($prefix);
-        $relative = ltrim($relative, '/');
-        $key = $prefix === '' ? $relative : rtrim($prefix, '/') . '/' . $relative;
-
-        return ltrim($key, '/');
+        return $this->requestHandler->handle($signature, $ops, $encoded, $ext);
     }
 
     public function imageUrl(string $path, ?int $width = null, $height = null, string $format = 'webp', string $mode = 'fill', ?int $quality = null, bool $autoOrient = true, ?string $disk = null): string
     {
-        $disk = $this->resolveDisk($disk);
+        $disk = $this->originResolver->resolveDisk($disk);
         $format = strtolower($format);
 
         if ($this->isPicturePlaceholderMode()) {
@@ -164,7 +49,7 @@ class ProxyImageService
             return $this->originalUrl($path, $disk);
         }
 
-        $path = $this->normalizePath($path, $disk);
+        $path = $this->originResolver->normalizePath($path, $disk);
         $ops = $this->buildOps($width, $height, $mode, $quality, $autoOrient);
 
         $encoded = rtrim(strtr(base64_encode($path), '+/', '-_'), '=');
@@ -181,10 +66,65 @@ class ProxyImageService
 
     public function picture(string|array|null $pictures, array $sizes = [], array $attributes = [], ?string $disk = null, ?string $class = null): string|false
     {
+        $data = $this->buildPictureRenderData($pictures, $sizes, $attributes, $disk, $class);
+
+        if ($data === false) {
+            return false;
+        }
+
+        return $this->renderPictureHtml($data);
+    }
+
+    public function pictureData(string|array|null $pictures, array $sizes = [], array $attributes = [], ?string $disk = null, ?string $class = null): array|false
+    {
+        $renderData = $this->buildPictureRenderData($pictures, $sizes, $attributes, $disk, $class);
+
+        if ($renderData === false) {
+            return false;
+        }
+
+        $resolvedDisk = $this->originResolver->resolveDisk($disk);
+        $devicesOrder = config('proxy-image.picture.devices_order', ['mobile', 'tablet', 'desktop']);
+        $normalizedPictures = $this->normalizePicturesByDevice(
+            $pictures,
+            $sizes,
+            is_array($devicesOrder) ? $devicesOrder : ['mobile', 'tablet', 'desktop']
+        );
+
+        $original = [];
+        foreach (array_values(array_unique(array_values($normalizedPictures))) as $path) {
+            $original[] = $this->originalUrl((string) $path, $resolvedDisk);
+        }
+
+        $generated = [];
+        foreach ((array) ($renderData['sources'] ?? []) as $source) {
+            foreach ($this->extractUrlsFromSrcset((string) ($source['srcset'] ?? '')) as $url) {
+                $generated[$url] = true;
+            }
+        }
+
+        foreach ($this->extractUrlsFromSrcset((string) (($renderData['img']['srcset'] ?? ''))) as $url) {
+            $generated[$url] = true;
+        }
+
+        $imgSrc = (string) (($renderData['img']['src'] ?? ''));
+        if ($imgSrc !== '' && !$this->isAbsoluteDataUrl($imgSrc)) {
+            $generated[$imgSrc] = true;
+        }
+
+        return [
+            'original' => $original,
+            'generated' => array_values(array_keys($generated)),
+        ];
+    }
+
+    protected function buildPictureRenderData(string|array|null $pictures, array $sizes = [], array $attributes = [], ?string $disk = null, ?string $class = null): array|false
+    {
         if (empty($pictures) || empty($sizes)) {
             return false;
         }
-        $disk = $this->resolveDisk($disk);
+
+        $disk = $this->originResolver->resolveDisk($disk);
 
         $formats = $this->normalizeFormats(
             $attributes['formats'] ?? config('proxy-image.picture.formats', ['jpg'])
@@ -201,17 +141,14 @@ class ProxyImageService
         $densities = $this->normalizeDensities(
             $attributes['densities'] ?? config('proxy-image.picture.densities', [1])
         );
-        $alt = e($attributes['alt'] ?? '');
-        $title = e($attributes['title'] ?? '');
-        $zoom = e($attributes['data-zoom'] ?? '');
-        $error = e($attributes['data-error-src'] ?? '');
-        $lazy = e($attributes['loading'] ?? 'lazy');
-        $imgClass = e($attributes['class'] ?? $attributes['img_class'] ?? '');
-        $imgClassAttr = $imgClass === '' ? '' : ' class="' . $imgClass . '"';
-        $pictureClass = e($class ?? $attributes['picture_class'] ?? '');
-        $pictureClassAttr = $pictureClass === '' ? '' : ' class="' . $pictureClass . '"';
+        $alt = (string) ($attributes['alt'] ?? '');
+        $title = (string) ($attributes['title'] ?? '');
+        $zoom = (string) ($attributes['data-zoom'] ?? '');
+        $error = (string) ($attributes['data-error-src'] ?? '');
+        $lazy = (string) ($attributes['loading'] ?? 'lazy');
+        $imgClass = (string) ($attributes['class'] ?? $attributes['img_class'] ?? '');
+        $pictureClass = (string) ($class ?? $attributes['picture_class'] ?? '');
         $fetchPriority = $this->normalizeFetchPriority($attributes['fetchPriority'] ?? $attributes['fetchpriority'] ?? null);
-        $fetchPriorityAttr = $fetchPriority === null ? '' : ' fetchpriority="' . e($fetchPriority) . '"';
 
         $normalizedPictures = $this->normalizePicturesByDevice($pictures, $sizes, $devicesOrder);
 
@@ -230,7 +167,7 @@ class ProxyImageService
         $fallbackExtension = $this->detectExtension($fallbackPath);
 
         if ($this->isPicturePlaceholderMode()) {
-            $localSources = $this->buildLocalDevelopmentSources(
+            $localSourceItems = $this->buildLocalDevelopmentSourceItems(
                 $sizes,
                 $breakpoints,
                 $devicesOrder
@@ -241,22 +178,25 @@ class ProxyImageService
             );
             $fallbackSrc = $this->buildLocalDevelopmentUrl($localWidth, $localHeight);
 
-            return <<<HTML
-            <picture{$pictureClassAttr}>
-                {$localSources}<img{$imgClassAttr}
-                    src="{$fallbackSrc}"
-                    alt="{$alt}"
-                    title="{$title}"
-                    width="{$localWidth}"
-                    height="{$localHeight}"
-                    data-zoom="{$zoom}"
-                    data-error-src="{$error}"
-                    onerror="imgError(this)"
-                    loading="{$lazy}"
-                    {$fetchPriorityAttr}
-                />
-            </picture>
-            HTML;
+            return [
+                'mode' => 'placeholder',
+                'sources' => $localSourceItems,
+                'img' => [
+                    'src' => $fallbackSrc,
+                    'srcset' => '',
+                    'placeholder_src' => $fallbackSrc,
+                    'alt' => $alt,
+                    'title' => $title,
+                    'width' => $localWidth,
+                    'height' => $localHeight,
+                    'data_zoom' => $zoom,
+                    'data_error_src' => $error,
+                    'loading' => $lazy,
+                    'fetchpriority' => $fetchPriority,
+                ],
+                'img_class' => $imgClass,
+                'picture_class' => $pictureClass,
+            ];
         }
 
         $deviceVariants = $this->buildPictureDeviceVariants(
@@ -265,7 +205,7 @@ class ProxyImageService
             $breakpoints,
             $devicesOrder
         );
-        $sources = $this->buildBypassSourcesFromVariants($deviceVariants, $disk);
+        $sources = $this->buildBypassSourceItemsFromVariants($deviceVariants, $disk);
         $normalizedPathCache = [];
         $originalUrlCache = [];
         $signedUrlCache = [];
@@ -289,7 +229,7 @@ class ProxyImageService
                 $cacheKey = $path . "\0" . $width . "\0" . (string) $height . "\0" . $format . "\0" . $mode . "\0" . (string) $quality . "\0" . $densitiesKey;
 
                 if (!array_key_exists($cacheKey, $densitySrcsetCache)) {
-                    $normalizedPath = $normalizedPathCache[$path] ??= $this->normalizePath($path, $disk);
+                    $normalizedPath = $normalizedPathCache[$path] ??= $this->originResolver->normalizePath($path, $disk);
                     $densitySrcsetCache[$cacheKey] = $this->buildDensitySrcsetFromPreparedPath(
                         $path,
                         $normalizedPath,
@@ -325,7 +265,11 @@ class ProxyImageService
 
             // If all device variants are identical, emit a single source without media.
             if (count($uniqueSrcsets) === 1) {
-                $sources .= '<source type="' . e($type) . '" srcset="' . e($uniqueSrcsets[0]) . '">' . PHP_EOL;
+                $sources[] = [
+                    'type' => $type,
+                    'srcset' => $uniqueSrcsets[0],
+                    'media' => null,
+                ];
                 continue;
             }
 
@@ -340,7 +284,11 @@ class ProxyImageService
 
                 $seen[$key] = true;
 
-                $sources .= '<source type="' . e($type) . '" srcset="' . e($formatSource['srcset']) . '" media="' . e($formatSource['media']) . '">' . PHP_EOL;
+                $sources[] = [
+                    'type' => $type,
+                    'srcset' => $formatSource['srcset'],
+                    'media' => $formatSource['media'],
+                ];
             }
         }
 
@@ -351,26 +299,29 @@ class ProxyImageService
                 $fallbackHeight = 'auto';
             }
 
-            return <<<HTML
-            <picture{$pictureClassAttr}>
-                {$sources}<img{$imgClassAttr}
-                    src="{$fallbackSrc}"
-                    alt="{$alt}"
-                    title="{$title}"
-                    width="{$fallbackWidth}"
-                    height="{$fallbackHeight}"
-                    data-zoom="{$zoom}"
-                    data-error-src="{$error}"
-                    onerror="imgError(this)"
-                    loading="{$lazy}"
-                    {$fetchPriorityAttr}
-                />
-            </picture>
-            HTML;
+            return [
+                'mode' => 'bypass',
+                'sources' => $sources,
+                'img' => [
+                    'src' => $fallbackSrc,
+                    'srcset' => '',
+                    'placeholder_src' => $fallbackSrc,
+                    'alt' => $alt,
+                    'title' => $title,
+                    'width' => (int) $fallbackWidth,
+                    'height' => $fallbackHeight,
+                    'data_zoom' => $zoom,
+                    'data_error_src' => $error,
+                    'loading' => $lazy,
+                    'fetchpriority' => $fetchPriority,
+                ],
+                'img_class' => $imgClass,
+                'picture_class' => $pictureClass,
+            ];
         }
 
         $fallbackSrc = $this->imageUrl($fallbackPath, (int) $fallbackWidth, $fallbackHeight, $fallbackFormat, $mode, $quality, true, $disk);
-        $normalizedFallbackPath = $normalizedPathCache[$fallbackPath] ??= $this->normalizePath($fallbackPath, $disk);
+        $normalizedFallbackPath = $normalizedPathCache[$fallbackPath] ??= $this->originResolver->normalizePath($fallbackPath, $disk);
         $fallbackSrcsetCacheKey = $fallbackPath . "\0" . (int) $fallbackWidth . "\0" . (string) $fallbackHeight . "\0" . $fallbackFormat . "\0" . $mode . "\0" . (string) $quality . "\0" . $densitiesKey;
 
         if (!array_key_exists($fallbackSrcsetCacheKey, $densitySrcsetCache)) {
@@ -391,24 +342,102 @@ class ProxyImageService
 
         $fallbackSrcset = $densitySrcsetCache[$fallbackSrcsetCacheKey];
 
-        if($fallbackHeight == 'a') {
-            $fallbackHeight = "auto";
+        if ($fallbackHeight == 'a') {
+            $fallbackHeight = 'auto';
+        }
+
+        return [
+            'mode' => 'proxy',
+            'sources' => $sources,
+            'img' => [
+                'src' => $fallbackSrc,
+                'srcset' => $fallbackSrcset,
+                'placeholder_src' => (string) $placeholder,
+                'alt' => $alt,
+                'title' => $title,
+                'width' => (int) $fallbackWidth,
+                'height' => $fallbackHeight,
+                'data_zoom' => $zoom,
+                'data_error_src' => $error,
+                'loading' => $lazy,
+                'fetchpriority' => $fetchPriority,
+            ],
+            'img_class' => $imgClass,
+            'picture_class' => $pictureClass,
+        ];
+    }
+
+    protected function renderPictureHtml(array $data): string
+    {
+        $pictureClass = trim((string) ($data['picture_class'] ?? ''));
+        $imgClass = trim((string) ($data['img_class'] ?? ''));
+        $pictureClassAttr = $pictureClass === '' ? '' : ' class="' . e($pictureClass) . '"';
+        $imgClassAttr = $imgClass === '' ? '' : ' class="' . e($imgClass) . '"';
+
+        $sourcesHtml = '';
+        foreach ((array) ($data['sources'] ?? []) as $source) {
+            $srcset = (string) ($source['srcset'] ?? '');
+            if ($srcset === '') {
+                continue;
+            }
+
+            $type = $source['type'] ?? null;
+            $media = $source['media'] ?? null;
+            $typeAttr = $type === null || $type === '' ? '' : ' type="' . e((string) $type) . '"';
+            $mediaAttr = $media === null || $media === '' ? '' : ' media="' . e((string) $media) . '"';
+            $sourcesHtml .= '<source' . $typeAttr . ' srcset="' . e($srcset) . '"' . $mediaAttr . '>' . PHP_EOL;
+        }
+
+        $img = (array) ($data['img'] ?? []);
+        $mode = (string) ($data['mode'] ?? 'proxy');
+        $src = (string) ($img['src'] ?? '');
+        $srcset = (string) ($img['srcset'] ?? '');
+        $placeholderSrc = (string) ($img['placeholder_src'] ?? $src);
+        $alt = e((string) ($img['alt'] ?? ''));
+        $title = e((string) ($img['title'] ?? ''));
+        $width = e((string) ($img['width'] ?? ''));
+        $height = e((string) ($img['height'] ?? ''));
+        $zoom = e((string) ($img['data_zoom'] ?? ''));
+        $error = e((string) ($img['data_error_src'] ?? ''));
+        $loading = e((string) ($img['loading'] ?? 'lazy'));
+        $fetchPriority = $img['fetchpriority'] ?? null;
+        $fetchPriorityAttr = $fetchPriority === null || $fetchPriority === ''
+            ? ''
+            : ' fetchpriority="' . e((string) $fetchPriority) . '"';
+
+        if ($mode === 'proxy') {
+            return <<<HTML
+            <picture{$pictureClassAttr}>
+                {$sourcesHtml}<img{$imgClassAttr}
+                    data-src="{$src}"
+                    data-srcset="{$srcset}"
+                    src="{$placeholderSrc}"
+                    alt="{$alt}"
+                    title="{$title}"
+                    width="{$width}"
+                    height="{$height}"
+                    data-zoom="{$zoom}"
+                    data-error-src="{$error}"
+                    onerror="imgError(this)"
+                    loading="{$loading}"
+                    {$fetchPriorityAttr}
+                />
+            </picture>
+            HTML;
         }
 
         return <<<HTML
         <picture{$pictureClassAttr}>
-            {$sources}<img{$imgClassAttr}
-                data-src="{$fallbackSrc}"
-                data-srcset="{$fallbackSrcset}"
-                src="{$placeholder}"
+            {$sourcesHtml}<img{$imgClassAttr}
+                src="{$src}"
                 alt="{$alt}"
                 title="{$title}"
-                width="{$fallbackWidth}"
-                height="{$fallbackHeight}"
+                width="{$width}"
+                height="{$height}"
                 data-zoom="{$zoom}"
                 data-error-src="{$error}"
                 onerror="imgError(this)"
-                loading="{$lazy}"
+                loading="{$loading}"
                 {$fetchPriorityAttr}
             />
         </picture>
@@ -446,7 +475,7 @@ class ProxyImageService
         return $variants;
     }
 
-    protected function buildBypassSourcesFromVariants(array $deviceVariants, string $disk): string
+    protected function buildBypassSourceItemsFromVariants(array $deviceVariants, string $disk): array
     {
         $deviceSources = [];
         $urlCache = [];
@@ -467,7 +496,7 @@ class ProxyImageService
         }
 
         if (empty($deviceSources)) {
-            return '';
+            return [];
         }
 
         $uniqueVariants = [];
@@ -478,12 +507,15 @@ class ProxyImageService
 
         if (count($uniqueVariants) === 1) {
             $single = $deviceSources[0];
-            $typeAttr = $single['type'] === null ? '' : ' type="' . e($single['type']) . '"';
 
-            return '<source' . $typeAttr . ' srcset="' . e($single['srcset']) . '">' . PHP_EOL;
+            return [[
+                'type' => $single['type'],
+                'srcset' => $single['srcset'],
+                'media' => null,
+            ]];
         }
 
-        $out = '';
+        $out = [];
         $seen = [];
 
         foreach ($deviceSources as $source) {
@@ -494,9 +526,11 @@ class ProxyImageService
             }
 
             $seen[$key] = true;
-            $typeAttr = $source['type'] === null ? '' : ' type="' . e($source['type']) . '"';
-
-            $out .= '<source' . $typeAttr . ' srcset="' . e($source['srcset']) . '" media="' . e($source['media']) . '">' . PHP_EOL;
+            $out[] = [
+                'type' => $source['type'],
+                'srcset' => $source['srcset'],
+                'media' => $source['media'],
+            ];
         }
 
         return $out;
@@ -616,43 +650,6 @@ class ProxyImageService
         return (string) (config("proxy-image.content_types.{$extension}") ?? 'application/octet-stream');
     }
 
-    protected function normalizePath(string $path, string $disk): string
-    {
-        $path = ltrim($path, '/');
-
-        if ($this->hasSourcePrefix($path)) {
-            return $path;
-        }
-
-        return "{$disk}:{$path}";
-    }
-
-    protected function resolveDisk(?string $disk = null): string
-    {
-        $disk = trim((string) $disk);
-
-        if ($disk === '') {
-            $disk = (string) config('proxy-image.default_disk', 'local');
-        }
-
-        if (!is_array(config("proxy-image.origins.{$disk}"))) {
-            return 'local';
-        }
-
-        return $disk;
-    }
-
-    protected function hasSourcePrefix(string $path): bool
-    {
-        foreach ((array) config('proxy-image.source_prefixes', []) as $prefix => $driver) {
-            if (str_starts_with($path, $prefix)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     protected function buildOps(?int $width, $height = null, string $mode, ?int $quality, bool $autoOrient): string
     {
         $parts = [];
@@ -742,12 +739,12 @@ class ProxyImageService
         return "{$baseUrl}/{$width}/{$height}";
     }
 
-    protected function buildLocalDevelopmentSources(
+    protected function buildLocalDevelopmentSourceItems(
         array $sizes,
         array $breakpoints,
         array $devicesOrder
-    ): string {
-        $sources = '';
+    ): array {
+        $items = [];
 
         foreach ($devicesOrder as $device) {
             if (!isset($sizes[$device], $breakpoints[$device])) {
@@ -761,10 +758,14 @@ class ProxyImageService
             );
             $src = $this->buildLocalDevelopmentUrl($width, $height);
 
-            $sources .= '<source srcset="' . e($src) . '" media="' . e((string) $breakpoints[$device]) . '">' . PHP_EOL;
+            $items[] = [
+                'type' => null,
+                'srcset' => $src,
+                'media' => (string) $breakpoints[$device],
+            ];
         }
 
-        return $sources;
+        return $items;
     }
 
     protected function buildDensitySrcset(
@@ -893,32 +894,39 @@ class ProxyImageService
 
     public function originalUrl(string $path, ?string $disk = null): string
     {
-        $disk = $this->resolveDisk($disk);
-        $path = trim($path);
-
-        if ($this->isAbsoluteUrl($path)) {
-            return $path;
-        }
-
-        $path = ltrim($path, '/');
-
-        if ($this->hasSourcePrefix($path)) {
-            [$source, $resolvedDisk, $relativePath] = $this->resolveSourceDriverAndRelativePath($path);
-            $originPrefix = (string) (config("proxy-image.origins.$resolvedDisk.prefix") ?? '');
-            $key = $this->buildKey($originPrefix, $relativePath);
-
-            return Storage::disk(config("proxy-image.origins.$resolvedDisk.disk"))->url($key);
-        }
-
-        $originPrefix = (string) (config("proxy-image.origins.$disk.prefix") ?? '');
-        $key = $this->buildKey($originPrefix, $path);
-
-        return Storage::disk(config("proxy-image.origins.$disk.disk"))->url($key);
+        return $this->originResolver->originalUrl($path, $disk);
     }
 
-    protected function isAbsoluteUrl(string $path): bool
+    protected function isAbsoluteDataUrl(string $path): bool
     {
-        return (bool) preg_match('~^(?:https?:)?//~i', $path);
+        return str_starts_with($path, 'data:');
+    }
+
+    protected function extractUrlsFromSrcset(string $srcset): array
+    {
+        $srcset = trim($srcset);
+        if ($srcset === '') {
+            return [];
+        }
+
+        $out = [];
+
+        foreach (explode(',', $srcset) as $candidate) {
+            $candidate = trim($candidate);
+            if ($candidate === '') {
+                continue;
+            }
+
+            $parts = preg_split('/\s+/', $candidate);
+            $url = trim((string) ($parts[0] ?? ''));
+            if ($url === '') {
+                continue;
+            }
+
+            $out[$url] = true;
+        }
+
+        return array_values(array_keys($out));
     }
 
     protected function detectExtension(string $path): string
