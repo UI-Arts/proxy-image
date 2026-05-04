@@ -83,38 +83,20 @@ class ProxyImageService
             return false;
         }
 
-        $resolvedDisk = $this->originResolver->resolveDisk($disk);
-        $devicesOrder = config('proxy-image.picture.devices_order', ['mobile', 'tablet', 'desktop']);
-        $normalizedPictures = $this->normalizePicturesByDevice(
-            $pictures,
-            $sizes,
-            is_array($devicesOrder) ? $devicesOrder : ['mobile', 'tablet', 'desktop']
-        );
-
-        $original = [];
-        foreach (array_values(array_unique(array_values($normalizedPictures))) as $path) {
-            $original[] = $this->originalUrl((string) $path, $resolvedDisk);
-        }
-
-        $generated = [];
-        foreach ((array) ($renderData['sources'] ?? []) as $source) {
-            foreach ($this->extractUrlsFromSrcset((string) ($source['srcset'] ?? '')) as $url) {
-                $generated[$url] = true;
-            }
-        }
-
-        foreach ($this->extractUrlsFromSrcset((string) (($renderData['img']['srcset'] ?? ''))) as $url) {
-            $generated[$url] = true;
-        }
-
-        $imgSrc = (string) (($renderData['img']['src'] ?? ''));
-        if ($imgSrc !== '' && !$this->isAbsoluteDataUrl($imgSrc)) {
-            $generated[$imgSrc] = true;
-        }
+        $imgData = (array) ($renderData['img'] ?? []);
+        $img = [
+            'src' => (string) ($imgData['src'] ?? ''),
+            'srcset' => (string) ($imgData['srcset'] ?? ''),
+            'alt' => (string) ($imgData['alt'] ?? ''),
+            'title' => (string) ($imgData['title'] ?? ''),
+            'width' => $imgData['width'] ?? null,
+            'height' => $imgData['height'] ?? null,
+        ];
 
         return [
-            'original' => $original,
-            'generated' => array_values(array_keys($generated)),
+            'mode' => (string) ($renderData['mode'] ?? 'proxy'),
+            'img' => $img,
+            'sources' => array_values((array) ($renderData['sources'] ?? [])),
         ];
     }
 
@@ -895,38 +877,6 @@ class ProxyImageService
     public function originalUrl(string $path, ?string $disk = null): string
     {
         return $this->originResolver->originalUrl($path, $disk);
-    }
-
-    protected function isAbsoluteDataUrl(string $path): bool
-    {
-        return str_starts_with($path, 'data:');
-    }
-
-    protected function extractUrlsFromSrcset(string $srcset): array
-    {
-        $srcset = trim($srcset);
-        if ($srcset === '') {
-            return [];
-        }
-
-        $out = [];
-
-        foreach (explode(',', $srcset) as $candidate) {
-            $candidate = trim($candidate);
-            if ($candidate === '') {
-                continue;
-            }
-
-            $parts = preg_split('/\s+/', $candidate);
-            $url = trim((string) ($parts[0] ?? ''));
-            if ($url === '') {
-                continue;
-            }
-
-            $out[$url] = true;
-        }
-
-        return array_values(array_keys($out));
     }
 
     protected function detectExtension(string $path): string

@@ -159,3 +159,56 @@ https://example.com/i/{signature}/w:800/dXBsb2Fkcy90ZXN0LmpwZw.jpg
     ],
 );
 ```
+
+Формат відповіді:
+
+```php
+[
+    'mode' => 'proxy', // proxy|bypass|placeholder
+    'img' => [
+        'src' => '/i/...',
+        'srcset' => '/i/... 1x, /i/... 2x',
+        'alt' => 'Some alt',
+        'title' => 'Some title',
+        'width' => 800,
+        'height' => 'auto',
+    ],
+    'sources' => [
+        [
+            'type' => 'image/avif',
+            'media' => '(min-width: 1200px)',
+            'srcset' => '/i/... 1x, /i/... 2x',
+        ],
+    ],
+]
+```
+
+Приклад для Vue:
+
+```vue
+<template>
+  <picture v-if="data?.img?.src">
+    <source
+      v-for="(source, i) in (data?.sources || [])"
+      :key="i"
+      :type="source.type || undefined"
+      :media="source.media || undefined"
+      :srcset="source.srcset || ''"
+    />
+    <img
+      :src="data.img.src"
+      :srcset="data.img.srcset || undefined"
+      :alt="data.img.alt || ''"
+      :title="data.img.title || undefined"
+      :width="data.img.width || undefined"
+      :height="data.img.height !== 'auto' ? data.img.height : undefined"
+    >
+  </picture>
+</template>
+
+<script setup>
+defineProps({
+  data: { type: Object, required: true }
+});
+</script>
+```
