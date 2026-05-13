@@ -388,6 +388,25 @@ class ProxyImageService
             : ' fetchpriority="' . e((string) $fetchPriority) . '"';
 
         if ($mode === 'proxy') {
+             if ($loading !== 'lazy') {      
+                return <<<HTML
+                <picture{$pictureClassAttr}>
+                    {$sourcesHtml}<img{$imgClassAttr}
+                        src="{$src}"
+                        srcset="{$srcset}"
+                        alt="{$alt}"
+                        title="{$title}"
+                        width="{$width}"
+                        height="{$height}"
+                        data-zoom="{$zoom}"
+                        data-error-src="{$error}"
+                        onerror="imgError(this)"
+                        loading="{$loading}"
+                        {$fetchPriorityAttr}
+                    />
+                </picture>
+                HTML;
+            }
             return <<<HTML
             <picture{$pictureClassAttr}>
                 {$sourcesHtml}<img{$imgClassAttr}
