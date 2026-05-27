@@ -355,6 +355,9 @@ class ProxyImageService
         $imgClass = trim((string) ($data['img_class'] ?? ''));
         $pictureClassAttr = $pictureClass === '' ? '' : ' class="' . e($pictureClass) . '"';
         $imgClassAttr = $imgClass === '' ? '' : ' class="' . e($imgClass) . '"';
+        $img = (array) ($data['img'] ?? []);
+        $mode = (string) ($data['mode'] ?? 'proxy');
+        $loading = e((string) ($img['loading'] ?? 'lazy'));
 
         $sourcesHtml = '';
         foreach ((array) ($data['sources'] ?? []) as $source) {
@@ -367,11 +370,12 @@ class ProxyImageService
             $media = $source['media'] ?? null;
             $typeAttr = $type === null || $type === '' ? '' : ' type="' . e((string) $type) . '"';
             $mediaAttr = $media === null || $media === '' ? '' : ' media="' . e((string) $media) . '"';
-            $sourcesHtml .= '<source' . $typeAttr . ' srcset="' . e($srcset) . '"' . $mediaAttr . '>' . PHP_EOL;
+            $sourceSrcsetAttr = $mode === 'proxy' && $loading === 'lazy'
+                ? ' data-srcset="' . e($srcset) . '"'
+                : ' srcset="' . e($srcset) . '"';
+            $sourcesHtml .= '<source' . $typeAttr . $sourceSrcsetAttr . $mediaAttr . '>' . PHP_EOL;
         }
 
-        $img = (array) ($data['img'] ?? []);
-        $mode = (string) ($data['mode'] ?? 'proxy');
         $src = (string) ($img['src'] ?? '');
         $srcset = (string) ($img['srcset'] ?? '');
         $placeholderSrc = (string) ($img['placeholder_src'] ?? $src);
@@ -381,7 +385,6 @@ class ProxyImageService
         $height = e((string) ($img['height'] ?? ''));
         $zoom = e((string) ($img['data_zoom'] ?? ''));
         $error = e((string) ($img['data_error_src'] ?? ''));
-        $loading = e((string) ($img['loading'] ?? 'lazy'));
         $fetchPriority = $img['fetchpriority'] ?? null;
         $fetchPriorityAttr = $fetchPriority === null || $fetchPriority === ''
             ? ''
