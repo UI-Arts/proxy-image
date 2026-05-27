@@ -352,12 +352,21 @@ class ProxyImageService
     protected function renderPictureHtml(array $data): string
     {
         $pictureClass = trim((string) ($data['picture_class'] ?? ''));
-        $imgClass = trim((string) ($data['img_class'] ?? ''));
-        $pictureClassAttr = $pictureClass === '' ? '' : ' class="' . e($pictureClass) . '"';
-        $imgClassAttr = $imgClass === '' ? '' : ' class="' . e($imgClass) . '"';
         $img = (array) ($data['img'] ?? []);
         $mode = (string) ($data['mode'] ?? 'proxy');
-        $loading = e((string) ($img['loading'] ?? 'lazy'));
+        $rawLoading = strtolower(trim((string) ($img['loading'] ?? 'lazy')));
+        $isLazyProxy = $mode === 'proxy' && $rawLoading === 'lazy';
+        $imgClassTokens = preg_split('/\s+/', trim((string) ($data['img_class'] ?? ''))) ?: [];
+        $imgClassTokens = array_values(array_filter($imgClassTokens, static fn ($token) => $token !== '' && $token !== 'lazy'));
+
+        if ($isLazyProxy) {
+            $imgClassTokens[] = 'lazy';
+        }
+
+        $imgClass = implode(' ', array_values(array_unique($imgClassTokens)));
+        $pictureClassAttr = $pictureClass === '' ? '' : ' class="' . e($pictureClass) . '"';
+        $imgClassAttr = $imgClass === '' ? '' : ' class="' . e($imgClass) . '"';
+        $loading = e($rawLoading);
 
         $sourcesHtml = '';
         foreach ((array) ($data['sources'] ?? []) as $source) {
@@ -370,7 +379,7 @@ class ProxyImageService
             $media = $source['media'] ?? null;
             $typeAttr = $type === null || $type === '' ? '' : ' type="' . e((string) $type) . '"';
             $mediaAttr = $media === null || $media === '' ? '' : ' media="' . e((string) $media) . '"';
-            $sourceSrcsetAttr = $mode === 'proxy' && $loading === 'lazy'
+            $sourceSrcsetAttr = $isLazyProxy
                 ? ' data-srcset="' . e($srcset) . '"'
                 : ' srcset="' . e($srcset) . '"';
             $sourcesHtml .= '<source' . $typeAttr . $sourceSrcsetAttr . $mediaAttr . '>' . PHP_EOL;
@@ -391,7 +400,7 @@ class ProxyImageService
             : ' fetchpriority="' . e((string) $fetchPriority) . '"';
 
         if ($mode === 'proxy') {
-             if ($loading !== 'lazy') {      
+            if (!$isLazyProxy) {
                 return <<<HTML
                 <picture{$pictureClassAttr}>
                     {$sourcesHtml}<img{$imgClassAttr}
