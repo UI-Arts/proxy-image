@@ -128,6 +128,9 @@ class ProxyImageService
         $zoom = (string) ($attributes['data-zoom'] ?? '');
         $error = (string) ($attributes['data-error-src'] ?? '');
         $lazy = (string) ($attributes['loading'] ?? 'lazy');
+        $lazyStrategy = $this->normalizeLazyStrategy(
+            $attributes['lazyStrategy'] ?? $attributes['lazy_strategy'] ?? null
+        );
         $imgClass = (string) ($attributes['class'] ?? $attributes['img_class'] ?? '');
         $pictureClass = (string) ($class ?? $attributes['picture_class'] ?? '');
         $fetchPriority = $this->normalizeFetchPriority($attributes['fetchPriority'] ?? $attributes['fetchpriority'] ?? null);
@@ -174,6 +177,7 @@ class ProxyImageService
                     'data_zoom' => $zoom,
                     'data_error_src' => $error,
                     'loading' => $lazy,
+                    'lazy_strategy' => $lazyStrategy,
                     'fetchpriority' => $fetchPriority,
                 ],
                 'img_class' => $imgClass,
@@ -295,6 +299,7 @@ class ProxyImageService
                     'data_zoom' => $zoom,
                     'data_error_src' => $error,
                     'loading' => $lazy,
+                    'lazy_strategy' => $lazyStrategy,
                     'fetchpriority' => $fetchPriority,
                 ],
                 'img_class' => $imgClass,
@@ -340,11 +345,12 @@ class ProxyImageService
                 'width' => (int) $fallbackWidth,
                 'height' => $fallbackHeight,
                 'data_zoom' => $zoom,
-                'data_error_src' => $error,
-                'loading' => $lazy,
-                'fetchpriority' => $fetchPriority,
-            ],
-            'img_class' => $imgClass,
+                    'data_error_src' => $error,
+                    'loading' => $lazy,
+                    'lazy_strategy' => $lazyStrategy,
+                    'fetchpriority' => $fetchPriority,
+                ],
+                'img_class' => $imgClass,
             'picture_class' => $pictureClass,
         ];
     }
@@ -355,11 +361,12 @@ class ProxyImageService
         $img = (array) ($data['img'] ?? []);
         $mode = (string) ($data['mode'] ?? 'proxy');
         $rawLoading = strtolower(trim((string) ($img['loading'] ?? 'lazy')));
+        $lazyStrategy = $this->normalizeLazyStrategy($img['lazy_strategy'] ?? null);
         $isLazyProxy = $mode === 'proxy' && $rawLoading === 'lazy';
         $imgClassTokens = preg_split('/\s+/', trim((string) ($data['img_class'] ?? ''))) ?: [];
         $imgClassTokens = array_values(array_filter($imgClassTokens, static fn ($token) => $token !== '' && $token !== 'lazy'));
 
-        if ($isLazyProxy) {
+        if ($isLazyProxy && $lazyStrategy === 'observer') {
             $imgClassTokens[] = 'lazy';
         }
 
@@ -395,6 +402,9 @@ class ProxyImageService
         $zoom = e((string) ($img['data_zoom'] ?? ''));
         $error = e((string) ($img['data_error_src'] ?? ''));
         $fetchPriority = $img['fetchpriority'] ?? null;
+        $lazyStrategyAttr = $isLazyProxy && $lazyStrategy !== 'observer'
+            ? ' data-lazy-strategy="' . e($lazyStrategy) . '"'
+            : '';
         $fetchPriorityAttr = $fetchPriority === null || $fetchPriority === ''
             ? ''
             : ' fetchpriority="' . e((string) $fetchPriority) . '"';
@@ -414,6 +424,7 @@ class ProxyImageService
                         data-error-src="{$error}"
                         onerror="imgError(this)"
                         loading="{$loading}"
+                        {$lazyStrategyAttr}
                         {$fetchPriorityAttr}
                     />
                 </picture>
@@ -433,6 +444,7 @@ class ProxyImageService
                     data-error-src="{$error}"
                     onerror="imgError(this)"
                     loading="{$loading}"
+                    {$lazyStrategyAttr}
                     {$fetchPriorityAttr}
                 />
             </picture>
@@ -451,10 +463,20 @@ class ProxyImageService
                 data-error-src="{$error}"
                 onerror="imgError(this)"
                 loading="{$loading}"
+                {$lazyStrategyAttr}
                 {$fetchPriorityAttr}
             />
         </picture>
         HTML;
+    }
+
+    protected function normalizeLazyStrategy(mixed $strategy): string
+    {
+        $strategy = strtolower(trim((string) $strategy));
+
+        return in_array($strategy, ['manual', 'observer'], true)
+            ? $strategy
+            : 'observer';
     }
 
     protected function buildPictureDeviceVariants(

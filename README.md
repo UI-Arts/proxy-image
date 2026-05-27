@@ -132,6 +132,7 @@ https://example.com/i/{signature}/w:800/dXBsb2Fkcy90ZXN0LmpwZw.jpg
         'data-zoom' => 'uploads/image.jpg',
         'data-error-src' => 'uploads/image.jpg',
         'loading' => 'lazy',
+        'lazyStrategy' => 'observer', // observer, manual
         'fetchPriority' => 'high', // high, low, auto
     ],
 )
@@ -156,9 +157,15 @@ https://example.com/i/{signature}/w:800/dXBsb2Fkcy90ZXN0LmpwZw.jpg
         'densities' => [1, 2],
         'formats' => ['avif', 'jpg'],
         'alt' => 'Some alt',
+        'lazyStrategy' => 'observer',
     ],
 );
 ```
+
+### Lazy strategy
+
+- `lazyStrategy=observer` — дефолтна поведінка для `loading=lazy`: пакет віддає `data-src`/`data-srcset` і автоматично додає клас `lazy`.
+- `lazyStrategy=manual` — пакет віддає deferred markup (`data-src`, `data-srcset`, placeholder у `src`), але **не** додає клас `lazy`. Це режим для кастомного тригера, наприклад hover, click, slider change або ручного `LazyLoad.load(...)`.
 
 Формат відповіді:
 
