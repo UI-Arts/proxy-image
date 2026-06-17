@@ -13,7 +13,7 @@ class S3Source implements ImageSourceInterface
             config('proxy-image.origins.s3.disk')
         )->readStream($path);
 
-        if ($stream === false) {
+        if (!is_resource($stream)) {
             AbortLogger::abort(404, 'Origin not found', ['driver' => 's3', 'path' => $path], 'info');
         }
 
