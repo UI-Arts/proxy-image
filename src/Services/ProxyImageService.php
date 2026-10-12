@@ -134,6 +134,7 @@ class ProxyImageService
         $imgClass = (string) ($attributes['class'] ?? $attributes['img_class'] ?? '');
         $pictureClass = (string) ($class ?? $attributes['picture_class'] ?? '');
         $fetchPriority = $this->normalizeFetchPriority($attributes['fetchPriority'] ?? $attributes['fetchpriority'] ?? null);
+        $loadImages = (bool) ($attributes['loadImages'] ?? $attributes['load_images'] ?? false);
 
         $normalizedPictures = $this->normalizePicturesByDevice($pictures, $sizes, $devicesOrder);
 
@@ -179,6 +180,7 @@ class ProxyImageService
                     'loading' => $lazy,
                     'lazy_strategy' => $lazyStrategy,
                     'fetchpriority' => $fetchPriority,
+                    'load_images' => $loadImages,
                 ],
                 'img_class' => $imgClass,
                 'picture_class' => $pictureClass,
@@ -301,6 +303,7 @@ class ProxyImageService
                     'loading' => $lazy,
                     'lazy_strategy' => $lazyStrategy,
                     'fetchpriority' => $fetchPriority,
+                    'load_images' => $loadImages,
                 ],
                 'img_class' => $imgClass,
                 'picture_class' => $pictureClass,
@@ -349,6 +352,7 @@ class ProxyImageService
                     'loading' => $lazy,
                     'lazy_strategy' => $lazyStrategy,
                     'fetchpriority' => $fetchPriority,
+                    'load_images' => $loadImages,
                 ],
                 'img_class' => $imgClass,
             'picture_class' => $pictureClass,
@@ -362,7 +366,11 @@ class ProxyImageService
         $mode = (string) ($data['mode'] ?? 'proxy');
         $rawLoading = strtolower(trim((string) ($img['loading'] ?? 'lazy')));
         $lazyStrategy = $this->normalizeLazyStrategy($img['lazy_strategy'] ?? null);
-        $isLazyProxy = $mode === 'proxy' && $rawLoading === 'lazy';
+        $loadImages = (bool) ($img['load_images'] ?? false);
+        // loadImages=true: the full image URL goes straight into src/srcset (native
+        // loading="lazy" still defers the browser fetch) instead of a placeholder swapped
+        // in by JS — needed so the URL is present in the HTML without executing JS.
+        $isLazyProxy = $mode === 'proxy' && $rawLoading === 'lazy' && !$loadImages;
         $imgClassTokens = preg_split('/\s+/', trim((string) ($data['img_class'] ?? ''))) ?: [];
         $imgClassTokens = array_values(array_filter($imgClassTokens, static fn ($token) => $token !== '' && $token !== 'lazy'));
 

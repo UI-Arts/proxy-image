@@ -134,6 +134,7 @@ https://example.com/i/{signature}/w:800/dXBsb2Fkcy90ZXN0LmpwZw.jpg
         'loading' => 'lazy',
         'lazyStrategy' => 'observer', // observer, manual
         'fetchPriority' => 'high', // high, low, auto
+        'loadImages' => false, // true: real src/srcset in markup even with loading=lazy, see below
     ],
 )
 !!}
@@ -166,6 +167,14 @@ https://example.com/i/{signature}/w:800/dXBsb2Fkcy90ZXN0LmpwZw.jpg
 
 - `lazyStrategy=observer` — дефолтна поведінка для `loading=lazy`: пакет віддає `data-src`/`data-srcset` і автоматично додає клас `lazy`.
 - `lazyStrategy=manual` — пакет віддає deferred markup (`data-src`, `data-srcset`, placeholder у `src`), але **не** додає клас `lazy`. Це режим для кастомного тригера, наприклад hover, click, slider change або ручного `LazyLoad.load(...)`.
+
+### loadImages (повний src/srcset без JS)
+
+За замовчуванням (`loadImages=false`, як і раніше) `picture()` для `loading=lazy` віддає `data-src`/`data-srcset` з реальним URL, а в `src` — 1px-плейсхолдер із `proxy-image.picture.placeholder`; підміну на реальне зображення виконує JS (lazy-loader), тож без виконання JS у `src`/`srcset` реального URL немає.
+
+`'loadImages' => true` вимикає цю підміну: `src`/`srcset`/`<source srcset>` одразу містять реальний (підписаний) URL зображення, а `loading="lazy"` залишається як нативний атрибут браузера (деферить завантаження поза в'юпортом без залежності від JS). Потрібно там, де зображення мають бути доступні в initial HTML без JS (SEO, краулери, no-JS клієнти) — наприклад, повна галерея товару.
+
+`pictureData()` завжди віддає реальний `src`/`srcset` (без плейсхолдер-підміни) незалежно від `loadImages` — прапорець стосується лише HTML-рендеру через `picture()`.
 
 Формат відповіді:
 
